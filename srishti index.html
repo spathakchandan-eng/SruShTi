@@ -1,0 +1,638 @@
+import { useState, useEffect, useRef } from "react";
+
+const API_URL = "https://api.anthropic.com/v1/messages";
+async function callClaude(system, user, maxTokens = 800) {
+  const res = await fetch(API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: "user", content: user }],
+    }),
+  });
+  const data = await res.json();
+  return data.content?.map((b) => b.text || "").join("") || "";
+}
+
+const SUBHASHITA_SYS = `You are a Sanskrit scholar. Return ONE subhashita as ONLY a JSON object, no markdown:
+{"verse":"<Sanskrit in Devanagari>","transliteration":"<Roman>","meaning":"<Hindi meaning>","source":"<text name>"}`;
+
+const TRANSLATE_SYS = `You are a Sanskrit scholar. Translate the given text between Sanskrit/Hindi/English.
+Return ONLY a JSON object, no markdown:
+{"translation":"<translated text>","script":"<detected input language>","notes":"<brief linguistic note or empty string>"}`;
+
+const QUIZ_SYS = `You are a Sanskrit teacher. Generate one quiz question for Sanskrit learners.
+Return ONLY a JSON object, no markdown:
+{"question":"<question in Hindi/English>","sanskrit":"<Devanagari word/phrase>","options":["<opt1>","<opt2>","<opt3>","<opt4>"],"correct":0,"explanation":"<explanation in Hindi>"}`;
+
+const CHAT_SYS = `आप सृष्टिः संस्कृतप्रतिष्ठानम् के विशेषज्ञ आचार्य हैं। संस्कृत व्याकरण, साहित्य, दर्शन के प्रश्नों का उत्तर संक्षेप में हिंदी और संस्कृत में दें। यदि उचित हो तो संस्कृत उद्धरण दें।`;
+
+const COURSES = [
+  { icon: "🌱", level: "प्रारम्भिक", en: "Beginner", topics: ["वर्णमाला", "शब्दरूप", "धातुरूप"], duration: "३ माह", fee: "निःशुल्क", accent: "#22c55e" },
+  { icon: "📜", level: "मध्यम", en: "Intermediate", topics: ["सन्धि", "समास", "कारक"], duration: "६ माह", fee: "₹२,४००", accent: "#f59e0b" },
+  { icon: "🔱", level: "उन्नत", en: "Advanced", topics: ["वेद", "उपनिषद्", "दर्शन"], duration: "१ वर्ष", fee: "₹४,८००", accent: "#a78bfa" },
+  { icon: "🕉️", level: "गुरुकुल", en: "Gurukul", topics: ["सम्पूर्ण पाठ्यक्रम", "व्यक्तिगत मार्गदर्शन", "प्रमाणपत्र"], duration: "२ वर्ष", fee: "₹९,६००", accent: "#FF9933" },
+];
+
+const TESTIMONIALS = [
+  { name: "अर्जुन शर्मा", city: "Pune", stars: 5, text: "सृष्टि में आकर संस्कृत सीखना मेरे जीवन का सर्वोत्तम निर्णय था। तीन माह में सरल श्लोक पढ़ने लगा।" },
+  { name: "Priya Nair", city: "Kochi", stars: 5, text: "The teaching methodology is unique — rooted in tradition yet accessible for modern learners. Highly recommended!" },
+  { name: "रमेश वर्मा", city: "Varanasi", stars: 5, text: "आचार्यों का मार्गदर्शन अतुलनीय है। संस्कृत अब कठिन नहीं लगती।" },
+  { name: "Sakshi Mehta", city: "Delhi", stars: 5, text: "The AI tools on this platform are incredible — the Sandhi engine and daily subhashita keep me engaged every day." },
+];
+
+// ── SVG Mandala Logo ──────────────────────────────────────────
+function MandalLogo({ size = 100 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="50" cy="50" r="48" stroke="#FF9933" strokeWidth="1" opacity="0.4" />
+      <circle cx="50" cy="50" r="38" stroke="#FFD700" strokeWidth="0.5" opacity="0.3" />
+      <circle cx="50" cy="50" r="28" stroke="#FF9933" strokeWidth="0.5" opacity="0.25" />
+      {/* 8 petals */}
+      {[0,45,90,135,180,225,270,315].map((deg) => {
+        const r = Math.PI * deg / 180;
+        const cx = 50 + 38 * Math.sin(r); const cy = 50 - 38 * Math.cos(r);
+        return <ellipse key={deg} cx={cx} cy={cy} rx="5" ry="10"
+          transform={`rotate(${deg},${cx},${cy})`}
+          fill="#FF9933" opacity="0.25" />;
+      })}
+      {/* 8 dots on outer ring */}
+      {[0,45,90,135,180,225,270,315].map((deg) => {
+        const r = Math.PI * deg / 180;
+        return <circle key={deg} cx={50 + 46 * Math.sin(r)} cy={50 - 46 * Math.cos(r)} r="1.8" fill="#FFD700" opacity="0.7" />;
+      })}
+      {/* 4 cardinal diamonds */}
+      {[0,90,180,270].map((deg) => {
+        const r = Math.PI * deg / 180;
+        const cx = 50 + 28 * Math.sin(r); const cy = 50 - 28 * Math.cos(r);
+        return <polygon key={deg} points={`${cx},${cy-5} ${cx+3},${cy} ${cx},${cy+5} ${cx-3},${cy}`}
+          fill="#FF9933" opacity="0.5" />;
+      })}
+      {/* Centre circle */}
+      <circle cx="50" cy="50" r="18" fill="#1A0800" stroke="#FF9933" strokeWidth="1" opacity="0.9" />
+      <circle cx="50" cy="50" r="14" fill="#1A0800" stroke="#FFD700" strokeWidth="0.5" opacity="0.6" />
+      {/* OM text */}
+      <text x="50" y="56" textAnchor="middle" fontSize="16" fontFamily="serif"
+        fill="#FF9933" opacity="0.95">ॐ</text>
+    </svg>
+  );
+}
+
+// ── Spinning Mandala background ───────────────────────────────
+function HeroMandala() {
+  return (
+    <svg style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", opacity:0.06, pointerEvents:"none" }}
+      width="700" height="700" viewBox="0 0 700 700" fill="none">
+      {[280,240,200,160,120,80].map((r,i) => (
+        <circle key={r} cx="350" cy="350" r={r} stroke="#FF9933" strokeWidth={i===0?1:0.5} strokeDasharray={i%2===0?"8 8":"4 4"} />
+      ))}
+      {[0,30,60,90,120,150,180,210,240,270,300,330].map((deg) => {
+        const rad = Math.PI*deg/180;
+        return <line key={deg} x1="350" y1="350"
+          x2={350+280*Math.sin(rad)} y2={350-280*Math.cos(rad)}
+          stroke="#FF9933" strokeWidth="0.4" opacity="0.5" />;
+      })}
+      {[0,45,90,135,180,225,270,315].map((deg) => {
+        const rad = Math.PI*deg/180;
+        const cx=350+230*Math.sin(rad), cy=350-230*Math.cos(rad);
+        return <ellipse key={deg} cx={cx} cy={cy} rx="18" ry="36"
+          transform={`rotate(${deg},${cx},${cy})`}
+          fill="#FF9933" opacity="0.08" />;
+      })}
+    </svg>
+  );
+}
+
+export default function SrishtiDark() {
+  // Subhashita
+  const [sub, setSub] = useState(null);
+  const [subLoading, setSubLoading] = useState(false);
+  // Translator
+  const [transIn, setTransIn] = useState("");
+  const [transOut, setTransOut] = useState(null);
+  const [transLoading, setTransLoading] = useState(false);
+  // Quiz
+  const [quiz, setQuiz] = useState(null);
+  const [quizLoading, setQuizLoading] = useState(false);
+  const [quizSel, setQuizSel] = useState(null);
+  // Chat
+  const [chatMsgs, setChatMsgs] = useState([
+    { role:"ai", text:"नमस्ते 🙏 मैं आपका आचार्य हूँ। संस्कृत भाषा, व्याकरण, या साहित्य से सम्बंधित कोई भी प्रश्न पूछें।" }
+  ]);
+  const [chatIn, setChatIn] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatRef = useRef();
+  // Testimonial
+  const [tIdx, setTIdx] = useState(0);
+  // Active feature tab
+  const [featureTab, setFeatureTab] = useState("sub"); // sub | translate | quiz | chat
+  // Enroll modal
+  const [enrollCourse, setEnrollCourse] = useState(null);
+
+  useEffect(() => { fetchSub(); }, []);
+  useEffect(() => {
+    const t = setInterval(() => setTIdx(i => (i+1) % TESTIMONIALS.length), 4500);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => { chatRef.current?.scrollIntoView({ behavior:"smooth" }); }, [chatMsgs]);
+
+  async function fetchSub() {
+    setSubLoading(true); setSub(null);
+    try {
+      const raw = await callClaude(SUBHASHITA_SYS, "Give today's subhashita.");
+      setSub(JSON.parse(raw.replace(/```json|```/g,"").trim()));
+    } catch { setSub({ verse:"विद्या ददाति विनयम्", transliteration:"Vidyā dadāti vinayam", meaning:"विद्या विनय देती है।", source:"हितोपदेश" }); }
+    setSubLoading(false);
+  }
+  async function handleTranslate() {
+    if (!transIn.trim()) return;
+    setTransLoading(true); setTransOut(null);
+    try {
+      const raw = await callClaude(TRANSLATE_SYS, `Translate: "${transIn.trim()}"`);
+      setTransOut(JSON.parse(raw.replace(/```json|```/g,"").trim()));
+    } catch { setTransOut({ translation:"अनुवाद उपलब्ध नहीं।", script:"", notes:"" }); }
+    setTransLoading(false);
+  }
+  async function loadQuiz() {
+    setQuizLoading(true); setQuiz(null); setQuizSel(null);
+    try {
+      const raw = await callClaude(QUIZ_SYS, "Generate a Sanskrit quiz question.");
+      setQuiz(JSON.parse(raw.replace(/```json|```/g,"").trim()));
+    } catch { setQuiz({ question:"'ज्ञान' का पर्यायवाची कौन है?", sanskrit:"ज्ञानम्", options:["विद्या","अज्ञान","मूढता","तमस्"], correct:0, explanation:"विद्या = knowledge" }); }
+    setQuizLoading(false);
+  }
+  async function sendChat() {
+    if (!chatIn.trim()) return;
+    const msg = chatIn.trim(); setChatIn("");
+    setChatMsgs(p => [...p, { role:"user", text:msg }]);
+    setChatLoading(true);
+    try {
+      const history = chatMsgs.map(m => `${m.role==="user"?"छात्र":"आचार्य"}: ${m.text}`).join("\n");
+      const resp = await callClaude(CHAT_SYS, `${history}\nछात्र: ${msg}`, 600);
+      setChatMsgs(p => [...p, { role:"ai", text:resp }]);
+    } catch { setChatMsgs(p => [...p, { role:"ai", text:"क्षमा करें, पुनः प्रयास करें।" }]); }
+    setChatLoading(false);
+  }
+
+  const C = "#FF9933", G = "#FFD700", BG = "#0A0500", CARD = "#120A00", BORDER = "#2E1A00";
+
+  return (
+    <div style={{ fontFamily:"'Tiro Devanagari Sanskrit','Georgia',serif", background:BG, minHeight:"100vh", color:"#F0DDB8" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Tiro+Devanagari+Sanskrit&display=swap');
+        *{box-sizing:border-box;margin:0;padding:0}
+        ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:#FF9933;border-radius:3px}::-webkit-scrollbar-track{background:#0A0500}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        @keyframes rotateSlow{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+        @keyframes counterSlow{from{transform:rotate(0deg)}to{transform:rotate(-360deg)}}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+        @keyframes goldShimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}
+        @keyframes slideR{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:translateX(0)}}
+        @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-12px)}}
+        .fu{animation:fadeUp .55s ease both}
+        .sr{animation:slideR .4s ease both}
+        .float{animation:float 4s ease-in-out infinite}
+        .gold{background:linear-gradient(90deg,#FFD700,#FF9933,#FFD700,#FF9933);background-size:300% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:goldShimmer 4s linear infinite}
+        .pulse{animation:pulse 1.4s infinite}
+        .rot{animation:rotateSlow 40s linear infinite}
+        .crot{animation:counterSlow 30s linear infinite}
+        .ornament{text-align:center;color:#FF9933;letter-spacing:14px;font-size:1.3rem;margin:.5rem 0 2rem}
+        .sec{padding:76px 24px}
+        .secdark{background:#0A0500;padding:76px 24px}
+        .secmid{background:#0F0700;padding:76px 24px}
+        .stitle{font-size:clamp(1.6rem,3.5vw,2.3rem);font-weight:900;text-align:center;margin-bottom:.4rem}
+        .ssub{text-align:center;color:#7A5030;font-style:italic;margin-bottom:2.5rem}
+        .bgold{background:linear-gradient(135deg,#FF9933,#CC6600);color:white;border:none;padding:12px 28px;border-radius:50px;font-family:inherit;font-size:.95rem;font-weight:700;cursor:pointer;transition:all .2s}
+        .bgold:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(255,153,51,.4)}
+        .bgold:disabled{opacity:.6;cursor:default;transform:none}
+        .bghost{background:transparent;color:#FF9933;border:1.5px solid #FF9933;padding:11px 26px;border-radius:50px;font-family:inherit;font-size:.95rem;font-weight:700;cursor:pointer;transition:all .2s}
+        .bghost:hover{background:#FF9933;color:white}
+        .card{background:${CARD};border:1px solid ${BORDER};border-radius:20px;transition:transform .2s,border-color .2s,box-shadow .2s;cursor:pointer}
+        .card:hover{transform:translateY(-5px);border-color:#FF9933;box-shadow:0 14px 36px rgba(255,153,51,.14)}
+        .inp{background:#1A0C00;border:1.5px solid ${BORDER};color:#F0DDB8;padding:12px 16px;border-radius:14px;font-family:inherit;font-size:.95rem;width:100%;outline:none;transition:border-color .2s,box-shadow .2s}
+        .inp:focus{border-color:#FF9933;box-shadow:0 0 0 3px rgba(255,153,51,.12)}
+        .inp::placeholder{color:#4A2E10}
+        .spin{width:16px;height:16px;border:2px solid rgba(255,255,255,.2);border-top-color:#FF9933;border-radius:50%;animation:spin .7s linear infinite;display:inline-block;vertical-align:middle}
+        .ftab{padding:9px 20px;border-radius:50px;border:none;font-family:inherit;font-size:.85rem;font-weight:700;cursor:pointer;transition:all .2s}
+        .ftab.on{background:linear-gradient(135deg,#FF9933,#CC6600);color:white}
+        .ftab.off{background:transparent;color:#7A5030;border:1.5px solid ${BORDER}}
+        .ftab.off:hover{border-color:#FF9933;color:#FF9933}
+        .qopt{background:#1A0C00;border:1.5px solid ${BORDER};border-radius:13px;padding:11px 16px;cursor:pointer;transition:all .2s;font-family:inherit;font-size:.9rem;color:#F0DDB8;width:100%;text-align:left}
+        .qopt:hover{border-color:#FF9933;color:#FF9933}
+        .qopt.ok{background:#0A1F0A;border-color:#4CAF50;color:#81C784}
+        .qopt.ng{background:#1F0A0A;border-color:#EF5350;color:#EF9A9A}
+        .navlink{color:#A07040;text-decoration:none;font-weight:600;font-size:.95rem;cursor:pointer;background:none;border:none;font-family:inherit;padding:0;transition:color .2s}
+        .navlink:hover{color:#FF9933}
+        .chatbbl{padding:11px 15px;border-radius:18px;max-width:84%;line-height:1.65;font-size:.88rem}
+        .chatai{background:#1A0C00;border:1px solid ${BORDER};align-self:flex-start}
+        .chatu{background:linear-gradient(135deg,#CC6600,#FF9933);color:white;align-self:flex-end}
+        .pill{display:inline-block;padding:4px 13px;border-radius:50px;font-size:.72rem;font-weight:700}
+      `}</style>
+
+      {/* ── NAVBAR ── */}
+      <nav style={{ position:"sticky", top:0, zIndex:100, background:"rgba(10,5,0,.97)", backdropFilter:"blur(16px)", borderBottom:`1px solid ${BORDER}`, padding:"0 32px", height:68, display:"flex", alignItems:"center", justifyContent:"space-between", gap:16 }}>
+        {/* Logo */}
+        <div style={{ display:"flex", alignItems:"center", gap:12, flexShrink:0 }}>
+          <div style={{ position:"relative", width:44, height:44 }}>
+            <div className="rot" style={{ position:"absolute", inset:0 }}>
+              <MandalLogo size={44} />
+            </div>
+          </div>
+          <div>
+            <div className="gold" style={{ fontSize:"1.35rem", fontWeight:900, lineHeight:1 }}>सृष्टिः</div>
+            <div style={{ fontSize:".58rem", color:"#4A2E10", letterSpacing:".18em", textTransform:"uppercase" }}>संस्कृतप्रतिष्ठानम्</div>
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:24 }}>
+          {["मुखपृष्ठ","परिचयः","पाठ्यक्रमाः","AI साधन","सम्पर्कः"].map(n => <button key={n} className="navlink">{n}</button>)}
+        </div>
+        <button className="bgold" style={{ padding:"8px 20px", fontSize:".85rem", flexShrink:0 }}>प्रवेशः →</button>
+      </nav>
+
+      {/* ── HERO ── */}
+      <header style={{ position:"relative", minHeight:"94vh", display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden", background:"radial-gradient(ellipse at 50% 42%, #220E00 0%, #0A0500 68%)" }}>
+        <HeroMandala />
+        {/* Concentric rings */}
+        {[320,420,520].map(r => (
+          <div key={r} style={{ position:"absolute", width:r, height:r, borderRadius:"50%", border:`1px solid rgba(255,153,51,${r===320?.12:.06})`, top:"50%", left:"50%", transform:"translate(-50%,-50%)" }} />
+        ))}
+        {/* Corner glyphs */}
+        {["ॐ","श्री","स्व","ज्ञ"].map((g,i) => (
+          <div key={g} style={{ position:"absolute", fontSize:"5rem", opacity:.04, color:"#FF9933", ...[{top:"6%",left:"5%"},{top:"6%",right:"5%"},{bottom:"10%",left:"5%"},{bottom:"10%",right:"5%"}][i] }}>{g}</div>
+        ))}
+        <div style={{ zIndex:2, textAlign:"center", padding:"0 24px", maxWidth:820 }}>
+          {/* Logo large */}
+          <div className="float" style={{ marginBottom:24 }}>
+            <div className="crot" style={{ display:"inline-block" }}>
+              <MandalLogo size={110} />
+            </div>
+          </div>
+          <p className="fu" style={{ fontSize:".75rem", fontWeight:900, letterSpacing:".24em", color:C, textTransform:"uppercase", marginBottom:14 }}>
+            सृष्टिः संस्कृतप्रतिष्ठानम्
+          </p>
+          <h1 className="fu gold" style={{ fontSize:"clamp(2rem,5.5vw,4.2rem)", fontWeight:900, lineHeight:1.15, marginBottom:18, animationDelay:".1s" }}>
+            विद्या नाम नरस्य<br />रूपमधिकम्
+          </h1>
+          <p className="fu" style={{ fontSize:"1.1rem", color:"#B8883A", fontStyle:"italic", marginBottom:8, animationDelay:".2s" }}>
+            "Knowledge is the highest adornment of a person"
+          </p>
+          <p className="fu" style={{ color:"#5A3810", marginBottom:38, animationDelay:".25s" }}>
+            संस्कृतस्य प्रचारः प्रसारश्च — Learn Sanskrit simply, traditionally, deeply
+          </p>
+          <div className="fu" style={{ display:"flex", gap:12, justifyContent:"center", flexWrap:"wrap", animationDelay:".35s" }}>
+            <button className="bgold">अभी जुड़ें (Join Now) →</button>
+            <button className="bghost">पाठ्यक्रम देखें</button>
+            <button className="bghost" onClick={() => { setFeatureTab("sub"); document.getElementById("aitools")?.scrollIntoView({behavior:"smooth"}); }}>
+              आज का श्लोक ✨
+            </button>
+          </div>
+        </div>
+        <div style={{ position:"absolute", bottom:0, left:0, right:0, height:130, background:"linear-gradient(to bottom,transparent,#0A0500)" }} />
+      </header>
+
+      {/* ── STATS ── */}
+      <div style={{ background:"#0F0700", borderTop:`1px solid ${BORDER}`, borderBottom:`1px solid ${BORDER}`, padding:"26px 24px" }}>
+        <div style={{ maxWidth:880, margin:"0 auto", display:"flex", justifyContent:"space-around", flexWrap:"wrap", gap:20 }}>
+          {[["५,०००+","छात्राः"],["२०+","आचार्याः"],["४८","देशाः"],["१०+","वर्षाणि"]].map(([n,l]) => (
+            <div key={l} style={{ textAlign:"center" }}>
+              <div className="gold" style={{ fontSize:"2rem", fontWeight:900 }}>{n}</div>
+              <div style={{ color:"#5A3810", fontSize:".82rem" }}>{l}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── ABOUT ── */}
+      <section className="secdark" id="about">
+        <div style={{ maxWidth:960, margin:"0 auto", display:"grid", gridTemplateColumns:"1fr 1fr", gap:52, alignItems:"center" }}>
+          <div className="fu">
+            <span className="pill" style={{ background:"rgba(255,153,51,.12)", color:C, marginBottom:16, display:"block", width:"fit-content" }}>परिचयः · About</span>
+            <h2 style={{ fontSize:"clamp(1.5rem,3vw,2.1rem)", fontWeight:900, lineHeight:1.3, marginBottom:18 }}>
+              सीखें संस्कृत —<br /><span className="gold">सरलतया, श्रद्धया</span>
+            </h2>
+            <div style={{ width:52, height:3, background:`linear-gradient(to right,${C},#CC6600)`, borderRadius:2, marginBottom:20 }} />
+            <p style={{ color:"#B8883A", lineHeight:1.9, marginBottom:14 }}>
+              सृष्टिः एकं सांस्कृतिकं शिक्षणकेन्द्रम् अस्ति। अत्र संस्कृतभाषाया अध्ययनं सरलतया परम्परागत-रीत्या च क्रियते।
+            </p>
+            <p style={{ color:"#5A3810", lineHeight:1.9, marginBottom:26 }}>
+              We blend ancient Gurukul wisdom with modern pedagogy — making Sanskrit accessible worldwide across all ages and backgrounds.
+            </p>
+            <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+              {["परम्परागत","आधुनिक","प्रमाणित"].map(t => (
+                <span key={t} className="pill" style={{ border:`1px solid ${BORDER}`, color:C }}>{t}</span>
+              ))}
+            </div>
+          </div>
+          <div className="fu" style={{ animationDelay:".15s" }}>
+            <div style={{ background:CARD, border:`1px solid ${BORDER}`, borderRadius:24, padding:28, position:"relative", overflow:"hidden" }}>
+              <div style={{ position:"absolute", top:-20, right:-16, fontSize:"7rem", opacity:.04, color:C }}>ॐ</div>
+              {[["🕐","Live Classes","सप्ताह में ५ दिन · ६-८ AM व ७-९ PM"],["🏆","Certification","राष्ट्रीय संस्कृत संस्थान द्वारा मान्यताप्राप्त"],["🌐","Global Community","४८ देशों के छात्रों के साथ"],["📱","Mobile App","Android और iOS पर उपलब्ध"]].map(([ico,ti,de],i) => (
+                <div key={ti} style={{ display:"flex", gap:14, alignItems:"flex-start", ...(i<3?{marginBottom:20,paddingBottom:20,borderBottom:`1px solid ${BORDER}`}:{}) }}>
+                  <div style={{ width:40, height:40, borderRadius:12, background:"rgba(255,153,51,.1)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:"1.2rem", flexShrink:0 }}>{ico}</div>
+                  <div>
+                    <div style={{ fontWeight:800, marginBottom:2 }}>{ti}</div>
+                    <div style={{ color:"#5A3810", fontSize:".83rem" }}>{de}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── COURSES ── */}
+      <section className="secmid" id="courses">
+        <div style={{ maxWidth:1040, margin:"0 auto" }}>
+          <div className="stitle fu">पाठ्यक्रमाः</div>
+          <div className="ornament">❧ ❧ ❧</div>
+          <p className="ssub">Choose your path in the journey of Sanskrit</p>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))", gap:20 }}>
+            {COURSES.map((c,i) => (
+              <div key={c.level} className="card fu" style={{ padding:"28px 22px", animationDelay:`${i*.1}s` }}>
+                <div style={{ fontSize:"2.6rem", marginBottom:14 }}>{c.icon}</div>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+                  <h3 style={{ fontWeight:900, fontSize:"1.1rem" }}>{c.level}</h3>
+                  <span className="pill" style={{ background:c.accent+"22", color:c.accent, border:`1px solid ${c.accent}44`, fontSize:".68rem" }}>{c.en}</span>
+                </div>
+                <div style={{ color:"#5A3810", fontSize:".75rem", marginBottom:14 }}>⏱ {c.duration} · 💰 {c.fee}</div>
+                <div style={{ borderTop:`1px solid ${BORDER}`, paddingTop:14, marginBottom:18 }}>
+                  {c.topics.map(t => (
+                    <div key={t} style={{ display:"flex", gap:8, alignItems:"center", marginBottom:7, color:"#B8883A", fontSize:".88rem" }}>
+                      <span style={{ color:C, flexShrink:0, fontSize:".7rem" }}>✦</span>{t}
+                    </div>
+                  ))}
+                </div>
+                <button className="bgold" style={{ width:"100%", padding:"10px" }} onClick={() => setEnrollCourse(c)}>
+                  पंजीकरण →
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── AI TOOLS ── */}
+      <section className="secdark" id="aitools">
+        <div style={{ maxWidth:740, margin:"0 auto" }}>
+          <div className="stitle fu">AI संस्कृत-साधन 🤖</div>
+          <div className="ornament">— ✦ —</div>
+          <p className="ssub">Powered by Claude AI — your 24×7 Sanskrit companion</p>
+
+          {/* Tab switcher */}
+          <div style={{ display:"flex", gap:8, justifyContent:"center", flexWrap:"wrap", marginBottom:32 }}>
+            {[["sub","✨ सुभाषितम्"],["translate","🔤 अनुवादक"],["quiz","🎯 प्रश्नोत्तरी"],["chat","💬 आचार्य"]].map(([k,l]) => (
+              <button key={k} className={`ftab ${featureTab===k?"on":"off"}`} onClick={() => { setFeatureTab(k); if(k==="quiz"&&!quiz) loadQuiz(); }}>{l}</button>
+            ))}
+          </div>
+
+          {/* ── Subhashita ── */}
+          {featureTab==="sub" && (
+            <div className="fu" style={{ background:`linear-gradient(135deg,#1A0800,#250E00)`, borderRadius:24, padding:36, border:`1px solid ${BORDER}`, position:"relative", overflow:"hidden" }}>
+              <div style={{ position:"absolute", top:-18, right:-14, fontSize:"7rem", opacity:.05 }}>❝</div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:12, marginBottom:20 }}>
+                <span className="pill" style={{ background:"rgba(255,153,51,.15)", color:C }}>✨ आज का सुभाषितम्</span>
+                <button className="bgold" style={{ padding:"7px 18px", fontSize:".82rem" }} onClick={fetchSub} disabled={subLoading}>
+                  {subLoading ? <span className="spin" /> : "नया श्लोक 🔄"}
+                </button>
+              </div>
+              {subLoading ? (
+                <p className="pulse" style={{ color:"#5A3810", fontStyle:"italic" }}>श्लोक लोड हो रहा है...</p>
+              ) : sub ? (
+                <>
+                  <p style={{ fontSize:"1.3rem", fontWeight:700, lineHeight:1.8, marginBottom:8 }}>{sub.verse}</p>
+                  <p style={{ color:"#7A5030", fontStyle:"italic", fontSize:".88rem", marginBottom:14 }}>{sub.transliteration}</p>
+                  <p style={{ color:"#C4A060", lineHeight:1.7, marginBottom:8 }}>{sub.meaning}</p>
+                  <p style={{ color:"#5A3810", fontSize:".8rem" }}>— {sub.source}</p>
+                </>
+              ) : null}
+            </div>
+          )}
+
+          {/* ── Translator ── */}
+          {featureTab==="translate" && (
+            <div className="fu" style={{ background:CARD, borderRadius:24, padding:32, border:`1px solid ${BORDER}` }}>
+              <p style={{ color:"#5A3810", fontSize:".82rem", marginBottom:12 }}>Sanskrit ↔ Hindi ↔ English — auto-detected</p>
+              <textarea className="inp" rows={3} value={transIn} onChange={e=>setTransIn(e.target.value)}
+                placeholder="यहाँ संस्कृत, हिंदी, या English लिखें..."
+                style={{ resize:"vertical", marginBottom:12 }}
+                onKeyDown={e => e.key==="Enter" && e.ctrlKey && handleTranslate()} />
+              <button className="bgold" style={{ width:"100%" }} onClick={handleTranslate} disabled={transLoading}>
+                {transLoading ? <><span className="spin" /><span style={{marginLeft:8}}>अनुवाद हो रहा है...</span></> : "अनुवाद करें →"}
+              </button>
+              <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginTop:12 }}>
+                {["अहं संस्कृतं पठामि","सत्यमेव जयते","Knowledge is power"].map(ex => (
+                  <button key={ex} onClick={() => setTransIn(ex)} style={{ padding:"4px 12px", borderRadius:50, border:`1px solid ${BORDER}`, background:"transparent", cursor:"pointer", fontSize:".75rem", fontFamily:"inherit", color:"#5A3810", transition:"all .15s" }}
+                    onMouseOver={e=>{e.target.style.borderColor=C;e.target.style.color=C;}}
+                    onMouseOut={e=>{e.target.style.borderColor=BORDER;e.target.style.color="#5A3810";}}>
+                    {ex}
+                  </button>
+                ))}
+              </div>
+              {transOut && (
+                <div className="sr" style={{ marginTop:18, padding:20, background:"#0F0700", borderRadius:16, border:`1px solid ${BORDER}` }}>
+                  <p style={{ fontSize:".68rem", fontWeight:900, color:C, textTransform:"uppercase", letterSpacing:".1em", marginBottom:8 }}>✦ अनुवाद</p>
+                  {transOut.script && <span className="pill" style={{ background:"rgba(255,153,51,.1)", color:"#7A5030", marginBottom:10, display:"block", width:"fit-content" }}>{transOut.script}</span>}
+                  <p style={{ fontSize:"1.05rem", lineHeight:1.8 }}>{transOut.translation}</p>
+                  {transOut.notes && <p style={{ color:"#5A3810", fontSize:".8rem", marginTop:10, fontStyle:"italic", borderTop:`1px solid ${BORDER}`, paddingTop:10 }}>📝 {transOut.notes}</p>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Quiz ── */}
+          {featureTab==="quiz" && (
+            <div className="fu" style={{ background:CARD, borderRadius:24, padding:32, border:`1px solid ${BORDER}` }}>
+              {quizLoading ? (
+                <div style={{ textAlign:"center", padding:32 }}>
+                  <div className="pulse" style={{ fontSize:"2.5rem" }}>🎯</div>
+                  <p style={{ color:"#5A3810", marginTop:12 }}>प्रश्न तैयार हो रहा है...</p>
+                </div>
+              ) : quiz ? (
+                <>
+                  <div style={{ marginBottom:20 }}>
+                    <span className="pill" style={{ background:"rgba(255,153,51,.12)", color:C, marginBottom:12, display:"block", width:"fit-content" }}>✦ प्रश्नः</span>
+                    <p style={{ lineHeight:1.7, marginBottom:10 }}>{quiz.question}</p>
+                    <div style={{ background:"#0F0700", padding:"10px 16px", borderRadius:10, border:`1px solid ${BORDER}`, display:"inline-block" }}>
+                      <span className="gold" style={{ fontSize:"1.4rem", fontWeight:900 }}>{quiz.sanskrit}</span>
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
+                    {quiz.options.map((opt,i) => {
+                      let cls = "qopt";
+                      if (quizSel!==null) { if(i===quiz.correct) cls+=" ok"; else if(i===quizSel) cls+=" ng"; }
+                      return (
+                        <button key={i} className={cls} onClick={() => quizSel===null && setQuizSel(i)}>
+                          <span style={{ color:"#4A2E10", marginRight:10, fontSize:".82rem" }}>{["अ","ब","स","द"][i]}.</span>{opt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {quizSel!==null && (
+                    <div className="sr" style={{ marginTop:16, padding:16, background:quizSel===quiz.correct?"#0A1A0A":"#1A0A0A", borderRadius:13, border:`1px solid ${quizSel===quiz.correct?"#4CAF50":"#EF5350"}` }}>
+                      <p style={{ fontWeight:800, marginBottom:4, color:quizSel===quiz.correct?"#81C784":"#EF9A9A" }}>
+                        {quizSel===quiz.correct ? "✅ शाबाश! सही उत्तर!" : `❌ गलत! सही: ${quiz.options[quiz.correct]}`}
+                      </p>
+                      <p style={{ color:"#B8883A", fontSize:".85rem", lineHeight:1.6 }}>{quiz.explanation}</p>
+                    </div>
+                  )}
+                  <button className="bgold" style={{ width:"100%", marginTop:16, padding:"11px" }} onClick={loadQuiz}>
+                    {quizLoading ? <span className="spin" /> : "नया प्रश्न →"}
+                  </button>
+                </>
+              ) : (
+                <div style={{ textAlign:"center", padding:32 }}>
+                  <button className="bgold" onClick={loadQuiz}>प्रश्नोत्तरी प्रारम्भ करें 🎯</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Chat ── */}
+          {featureTab==="chat" && (
+            <div className="fu" style={{ background:CARD, borderRadius:24, border:`1px solid ${BORDER}`, overflow:"hidden" }}>
+              <div style={{ background:`linear-gradient(135deg,#1A0800,#250E00)`, padding:"16px 22px", display:"flex", alignItems:"center", gap:12 }}>
+                <div style={{ width:40, height:40, borderRadius:"50%", background:`linear-gradient(135deg,${C},#CC6600)`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:"1.1rem" }}>🧑‍🏫</div>
+                <div>
+                  <div style={{ fontWeight:800 }}>आचार्य-सहायकः</div>
+                  <div style={{ color:"#7A5030", fontSize:".75rem" }}>● AI-powered · सदा तत्पर</div>
+                </div>
+              </div>
+              <div style={{ height:320, overflowY:"auto", padding:"18px 18px 10px", display:"flex", flexDirection:"column", gap:10, background:"#0A0500" }}>
+                {chatMsgs.map((m,i) => (
+                  <div key={i} style={{ display:"flex", justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
+                    <div className={`chatbbl ${m.role==="user"?"chatu":"chatai"}`}>{m.text}</div>
+                  </div>
+                ))}
+                {chatLoading && (
+                  <div style={{ display:"flex" }}>
+                    <div className="chatbbl chatai pulse" style={{ color:"#5A3810" }}>आचार्य सोच रहे हैं...</div>
+                  </div>
+                )}
+                <div ref={chatRef} />
+              </div>
+              <div style={{ padding:"10px 14px", borderTop:`1px solid ${BORDER}`, display:"flex", gap:9, background:CARD }}>
+                <input className="inp" style={{ flexGrow:1 }} value={chatIn} onChange={e=>setChatIn(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&!chatLoading&&sendChat()}
+                  placeholder="प्रश्न पूछें... (जैसे: सन्धि क्या है?)" disabled={chatLoading} />
+                <button className="bgold" style={{ padding:"10px 18px", flexShrink:0 }} onClick={sendChat} disabled={chatLoading||!chatIn.trim()}>
+                  {chatLoading ? <span className="spin" /> : "→"}
+                </button>
+              </div>
+              <div style={{ padding:"8px 14px 12px", display:"flex", gap:7, flexWrap:"wrap", background:CARD }}>
+                {["सन्धि क्या है?","कालिदास कौन थे?","वेद कितने हैं?","ॐ का अर्थ?"].map(q => (
+                  <button key={q} onClick={()=>setChatIn(q)} style={{ padding:"4px 11px", borderRadius:50, border:`1px solid ${BORDER}`, background:"transparent", cursor:"pointer", fontSize:".72rem", fontFamily:"inherit", color:"#5A3810", transition:"all .15s" }}
+                    onMouseOver={e=>{e.target.style.color=C;e.target.style.borderColor=C;}}
+                    onMouseOut={e=>{e.target.style.color="#5A3810";e.target.style.borderColor=BORDER;}}>
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* ── TESTIMONIALS ── */}
+      <section className="secmid">
+        <div style={{ maxWidth:600, margin:"0 auto", textAlign:"center" }}>
+          <div className="stitle fu">छात्र-अनुभव</div>
+          <div className="ornament">❧ ❧ ❧</div>
+          <div style={{ background:CARD, borderRadius:24, padding:36, border:`1px solid ${BORDER}`, minHeight:190, position:"relative" }}>
+            <div style={{ position:"absolute", top:14, left:22, fontSize:"3rem", opacity:.1, color:C }}>❝</div>
+            {(() => { const t=TESTIMONIALS[tIdx]; return (
+              <div key={tIdx} className="sr">
+                <div style={{ marginBottom:14 }}>{Array(t.stars).fill(0).map((_,i)=><span key={i} style={{color:C}}>★</span>)}</div>
+                <p style={{ color:"#B8883A", lineHeight:1.9, fontStyle:"italic", marginBottom:18 }}>"{t.text}"</p>
+                <div style={{ fontWeight:800, color:C }}>{t.name}</div>
+                <div style={{ color:"#5A3810", fontSize:".8rem" }}>{t.city}</div>
+              </div>
+            ); })()}
+          </div>
+          <div style={{ display:"flex", gap:7, justifyContent:"center", marginTop:14 }}>
+            {TESTIMONIALS.map((_,i) => (
+              <div key={i} onClick={()=>setTIdx(i)} style={{ width:i===tIdx?22:7, height:7, borderRadius:4, background:i===tIdx?C:BORDER, transition:"all .3s", cursor:"pointer" }} />
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── CONTACT ── */}
+      <section className="secdark" id="contact">
+        <div style={{ maxWidth:760, margin:"0 auto", textAlign:"center" }}>
+          <div className="stitle fu">सम्पर्कः</div>
+          <div className="ornament">— ✦ —</div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))", gap:14, marginBottom:32 }}>
+            {[["📧","ई-मेल","info@srishti.org"],["📞","दूरभाष","+91 98765 43210"],["📍","पता","Varanasi, Uttar Pradesh"],["⏰","समय","Mon–Sat · 6AM–9PM"]].map(([ico,l,v])=>(
+              <div key={l} style={{ background:CARD, border:`1px solid ${BORDER}`, borderRadius:16, padding:"18px 14px", textAlign:"center" }}>
+                <div style={{ fontSize:"1.5rem", marginBottom:6 }}>{ico}</div>
+                <div style={{ color:"#5A3810", fontSize:".72rem", marginBottom:4 }}>{l}</div>
+                <div style={{ fontWeight:700, color:"#B8883A", fontSize:".88rem" }}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ background:CARD, border:`1px solid ${BORDER}`, borderRadius:24, padding:32 }}>
+            <h3 style={{ fontWeight:800, marginBottom:20, color:C }}>संदेश भेजें</h3>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
+              <input className="inp" placeholder="आपका नाम" />
+              <input className="inp" type="email" placeholder="ई-मेल" />
+            </div>
+            <textarea className="inp" rows={3} placeholder="संदेश..." style={{ resize:"vertical", marginBottom:14 }} />
+            <button className="bgold" style={{ width:"100%", padding:"13px" }}>संदेश भेजें →</button>
+          </div>
+        </div>
+      </section>
+
+      {/* ── FOOTER ── */}
+      <footer style={{ background:"#060300", borderTop:`1px solid ${BORDER}`, padding:"48px 32px 22px" }}>
+        <div style={{ maxWidth:960, margin:"0 auto" }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:32, marginBottom:36 }}>
+            <div>
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+                <MandalLogo size={36} />
+                <span className="gold" style={{ fontSize:"1.3rem", fontWeight:900 }}>सृष्टिः</span>
+              </div>
+              <p style={{ color:"#4A2E10", fontSize:".83rem", lineHeight:1.85 }}>संस्कृतस्य प्रचारः प्रसारश्च। Reviving the language of the gods for a new generation.</p>
+            </div>
+            {[["पाठ्यक्रम",["प्रारम्भिक","मध्यम","उन्नत","गुरुकुल"]],["AI साधन",["सुभाषितम्","अनुवादक","प्रश्नोत्तरी","आचार्य"]],["संस्थान",["परिचयः","आचार्याः","प्रमाणपत्र","सम्पर्कः"]]].map(([h,items])=>(
+              <div key={h}>
+                <h5 style={{ color:C, fontWeight:700, marginBottom:12 }}>{h}</h5>
+                {items.map(it=>(
+                  <div key={it} style={{ color:"#4A2E10", fontSize:".83rem", marginBottom:6, cursor:"pointer", transition:"color .15s" }}
+                    onMouseOver={e=>e.target.style.color=C} onMouseOut={e=>e.target.style.color="#4A2E10"}>{it}</div>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div style={{ borderTop:`1px solid ${BORDER}`, paddingTop:18, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 }}>
+            <p style={{ color:"#2E1800", fontSize:".8rem" }}>© २०२६ सृष्टिः संस्कृतप्रतिष्ठानम् · सर्वाधिकार सुरक्षित</p>
+            <span className="gold" style={{ fontSize:".88rem", fontWeight:700 }}>सर्वे भवन्तु सुखिनः 🙏</span>
+          </div>
+        </div>
+      </footer>
+
+      {/* ── ENROLL MODAL ── */}
+      {enrollCourse && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }} onClick={e=>e.target===e.currentTarget&&setEnrollCourse(null)}>
+          <div className="sr" style={{ background:"#120A00", border:`1px solid ${BORDER}`, borderRadius:24, padding:36, maxWidth:440, width:"100%", position:"relative" }}>
+            <button onClick={()=>setEnrollCourse(null)} style={{ position:"absolute", top:16, right:18, background:"none", border:"none", color:"#5A3810", fontSize:"1.3rem", cursor:"pointer", fontFamily:"inherit" }}>✕</button>
+            <div style={{ fontSize:"2.5rem", marginBottom:12 }}>{enrollCourse.icon}</div>
+            <h3 style={{ fontWeight:900, fontSize:"1.3rem", marginBottom:4 }}>{enrollCourse.level} <span style={{ color:C }}>पाठ्यक्रम</span></h3>
+            <p style={{ color:"#5A3810", marginBottom:20 }}>{enrollCourse.en} · {enrollCourse.duration} · {enrollCourse.fee}</p>
+            <div style={{ display:"flex", flexDirection:"column", gap:10, marginBottom:20 }}>
+              <input className="inp" placeholder="आपका नाम / Your Name" />
+              <input className="inp" type="email" placeholder="ई-मेल / Email" />
+              <input className="inp" type="tel" placeholder="दूरभाष / Phone" />
+            </div>
+            <button className="bgold" style={{ width:"100%", padding:"13px", fontSize:"1rem" }}>
+              पंजीकरण करें → (Register)
+            </button>
+            <p style={{ color:"#4A2E10", fontSize:".75rem", textAlign:"center", marginTop:12 }}>हम शीघ्र ही आपसे सम्पर्क करेंगे। 🙏</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
